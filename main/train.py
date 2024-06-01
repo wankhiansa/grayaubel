@@ -232,7 +232,7 @@ if __name__ == "__main__":
     if task == 'classification':
         result = 'Epoch\tTime(sec)\tLoss_train\tAUC_dev\tAUC_test'
     if task == 'regression':
-        result = 'Epoch\tTime(sec)\tLoss_train\tR2_dev\tR2_test'
+        result = 'Epoch\tTime(sec)\tLoss_dev\tLoss_train\tR2_dev\tR2_train'
 
     with open(file_result, 'w') as f:
         f.write(result + '\n')
@@ -250,6 +250,7 @@ if __name__ == "__main__":
         if epoch % decay_interval == 0:
             trainer.optimizer.param_groups[0]['lr'] *= lr_decay
 
+        loss_dev = trainer.train(dataset_dev)
         loss_train = trainer.train(dataset_train)
 
         if task == 'classification':
@@ -257,8 +258,7 @@ if __name__ == "__main__":
             prediction_test = tester.test_classifier(dataset_test)
         if task == 'regression':
             prediction_dev = tester.test_regressor(dataset_dev)
-            prediction_test = tester.test_regressor(dataset_test)
-
+            prediction_train = tester.test_regressor(dataset_train)
 
         time = timeit.default_timer() - start
 
@@ -271,8 +271,8 @@ if __name__ == "__main__":
             print('-'*100)
             print(result)
 
-        result = '\t'.join(map(str, [epoch, time, loss_train,
-                                     prediction_dev, prediction_test]))
+        result = '\t'.join(map(str, [epoch, time, loss_dev, loss_train,
+                                     prediction_dev, prediction_train]))
         tester.save_result(result, file_result)
 
         print(result)
