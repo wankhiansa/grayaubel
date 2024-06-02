@@ -112,7 +112,7 @@ def create_datasets(task, dataset, radius, device):
 
         for data in data_original:
 
-            smiles, property = data.strip().split()
+            smiles, homo, lumo, gap, property = data.strip().split()
 
             """Create each data with the above defined functions."""
             mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
@@ -128,12 +128,13 @@ def create_datasets(task, dataset, radius, device):
             """
             fingerprints = torch.LongTensor(fingerprints).to(device)
             adjacency = torch.FloatTensor(adjacency).to(device)
+            quantum_eng = torch.FloatTensor(np.array([float(homo), float(lumo), float(gap)])).to(device)
             if task == 'classification':
                 property = torch.LongTensor([int(property)]).to(device)
             if task == 'regression':
                 property = torch.FloatTensor([[float(property)]]).to(device)
 
-            dataset.append((fingerprints, adjacency, molecular_size, property))
+            dataset.append((fingerprints, adjacency, molecular_size, quantum_eng, property))
 
         return dataset
 

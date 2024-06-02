@@ -13,27 +13,18 @@ from sklearn.metrics import roc_auc_score, r2_score
 
 import preprocess as pp
 
-
-class MolecularGraphNeuralNetwork(nn.Module):
+class GraphNeuralNetwork(nn.Module):
     def __init__(self, N_fingerprints, dim, layer_hidden, layer_output):
-        super(MolecularGraphNeuralNetwork, self).__init__()
+        super(GraphNeuralNetwork, self).__init__()
         self.embed_fingerprint = nn.Embedding(N_fingerprints, dim)
-        self.W_fingerprint = nn.ModuleList([nn.Linear(dim, dim)
-                                            for _ in range(layer_hidden)])
-        self.W_output = nn.ModuleList([nn.Linear(dim, dim)
-                                       for _ in range(layer_output)])
+        self.W_fingerprint = nn.ModuleList([nn.Linear(dim, dim) for _ in range(layer_hidden)])
+        self.W_output = nn.ModuleList([nn.Linear(dim, dim) for _ in range(layer_output)])
         if task == 'classification':
             self.W_property = nn.Linear(dim, 2)
         if task == 'regression':
             self.W_property = nn.Linear(dim, 1)
 
     def pad(self, matrices, pad_value):
-        """Pad the list of matrices
-        with a pad_value (e.g., 0) for batch processing.
-        For example, given a list of matrices [A, B, C],
-        we obtain a new matrix [A00, 0B0, 00C],
-        where 0 is the zero (i.e., pad value) matrix.
-        """
         shapes = [m.shape for m in matrices]
         M, N = sum([s[0] for s in shapes]), sum([s[1] for s in shapes])
         zeros = torch.FloatTensor(np.zeros((M, N))).to(device)
@@ -51,76 +42,62 @@ class MolecularGraphNeuralNetwork(nn.Module):
         return hidden_vectors + torch.matmul(matrix, hidden_vectors)
 
     def sum(self, vectors, axis):
-        sum_vectors = [torch.sum(v, 0) for v in torch.split(vectors, axis)]
+        sum_vectors = [torch.sum(v, 0) for v in torch.split(vectors, tuple(axis.cpu().numpy()))]
         return torch.stack(sum_vectors)
 
     def mean(self, vectors, axis):
-        mean_vectors = [torch.mean(v, 0) for v in torch.split(vectors, axis)]
+        mean_vectors = [torch.mean(v, 0) for v in torch.split(vectors, tuple(axis.cpu().numpy()))]
         return torch.stack(mean_vectors)
 
     def gnn(self, inputs):
-
-        """Cat or pad each input data for batch processing."""
         fingerprints, adjacencies, molecular_sizes = inputs
         fingerprints = torch.cat(fingerprints)
         adjacencies = self.pad(adjacencies, 0)
 
-        """GNN layer (update the fingerprint vectors)."""
         fingerprint_vectors = self.embed_fingerprint(fingerprints)
         for l in range(layer_hidden):
             hs = self.update(adjacencies, fingerprint_vectors, l)
             fingerprint_vectors = F.normalize(hs, 2, 1)  # normalize.
 
-        """Molecular vector by sum or mean of the fingerprint vectors."""
         molecular_vectors = self.sum(fingerprint_vectors, molecular_sizes)
-        # molecular_vectors = self.mean(fingerprint_vectors, molecular_sizes)
-
         return molecular_vectors
+    
+class CombinedModel(nn.Module):
+    def __init__(self, gnn, homo_lumo_dim, mlp_hidden_dim, mlp_output_dim):
+        super(CombinedModel, self).__init__()
+        self.gnn = gnn
+        self.mlp_hl = nn.Sequential(
+            nn.Linear(homo_lumo_dim, mlp_hidden_dim),
+            nn.ReLU(),
+            nn.Linear(mlp_hidden_dim, mlp_output_dim),
+            nn.ReLU()
+        )
+        self.fc = nn.Linear(mlp_output_dim + gnn.W_property.in_features, 1)
 
-    def mlp(self, vectors):
-        """Classifier or regressor based on multilayer perceptron."""
-        for l in range(layer_output):
-            vectors = torch.relu(self.W_output[l](vectors))
-        outputs = self.W_property(vectors)
-        return outputs
-
-    def forward_classifier(self, data_batch, train):
-
-        inputs = data_batch[:-1]
-        correct_labels = torch.cat(data_batch[-1])
-
-        if train:
-            molecular_vectors = self.gnn(inputs)
-            predicted_scores = self.mlp(molecular_vectors)
-            loss = F.cross_entropy(predicted_scores, correct_labels)
-            return loss
+    def forward(self, gnn_data, homo_lumo_data, train=True):
+        gnn_inputs = gnn_data[:-1]
+        
+        # Check if gnn_data[-1] is a tensor
+        if isinstance(gnn_data[-1], torch.Tensor):
+            correct_values = gnn_data[-1].view(-1, 1)  # Adjust size to match predicted values
         else:
-            with torch.no_grad():
-                molecular_vectors = self.gnn(inputs)
-                predicted_scores = self.mlp(molecular_vectors)
-            predicted_scores = predicted_scores.to('cpu').data.numpy()
-            predicted_scores = [s[1] for s in predicted_scores]
-            correct_labels = correct_labels.to('cpu').data.numpy()
-            return predicted_scores, correct_labels
+            correct_values = torch.cat(gnn_data[-1]).view(-1, 1)  # Adjust size to match predicted values
 
-    def forward_regressor(self, data_batch, train):
+        molecular_vectors = self.gnn.gnn(gnn_inputs)
+        homo_lumo_vectors = self.mlp_hl(homo_lumo_data)
 
-        inputs = data_batch[:-1]
-        correct_values = torch.cat(data_batch[-1])
+        combined_vectors = torch.cat((molecular_vectors, homo_lumo_vectors), dim=1)
+        predicted_values = self.fc(combined_vectors)
 
         if train:
-            molecular_vectors = self.gnn(inputs)
-            predicted_values = self.mlp(molecular_vectors)
             loss = F.mse_loss(predicted_values, correct_values)
             return loss
         else:
             with torch.no_grad():
-                molecular_vectors = self.gnn(inputs)
-                predicted_values = self.mlp(molecular_vectors)
-            predicted_values = predicted_values.to('cpu').data.numpy()
-            correct_values = correct_values.to('cpu').data.numpy()
-            predicted_values = np.concatenate(predicted_values)
-            correct_values = np.concatenate(correct_values)
+                predicted_values = predicted_values.to('cpu').data.numpy()
+                correct_values = correct_values.to('cpu').data.numpy()
+                predicted_values = np.concatenate(predicted_values)
+                correct_values = np.concatenate(correct_values)
             return predicted_values, correct_values
 
 
@@ -135,10 +112,12 @@ class Trainer(object):
         loss_total = 0
         for i in range(0, N, batch_train):
             data_batch = list(zip(*dataset[i:i+batch_train]))
-            if task == 'classification':
-                loss = self.model.forward_classifier(data_batch, train=True)
-            if task == 'regression':
-                loss = self.model.forward_regressor(data_batch, train=True)
+            fingerprints_batch = [fp.clone().detach().to(device) for fp in data_batch[0]]
+            adjacencies_batch = [adj.clone().detach().to(device) for adj in data_batch[1]]
+            molecular_sizes_batch = torch.tensor(data_batch[2], dtype=torch.long).to(device)
+            homo_lumo_batch = torch.stack([hl.clone().detach().to(device) for hl in data_batch[3]]).to(device)
+            correct_values_batch = torch.tensor(data_batch[4], dtype=torch.float32).to(device)
+            loss = self.model((fingerprints_batch, adjacencies_batch, molecular_sizes_batch, correct_values_batch), homo_lumo_batch, train=True)
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
@@ -150,41 +129,115 @@ class Tester(object):
     def __init__(self, model):
         self.model = model
 
-    def test_classifier(self, dataset):
-        N = len(dataset)
-        P, C = [], []
-        for i in range(0, N, batch_test):
-            data_batch = list(zip(*dataset[i:i+batch_test]))
-            predicted_scores, correct_labels = self.model.forward_classifier(
-                                               data_batch, train=False)
-            P.append(predicted_scores)
-            C.append(correct_labels)
-        AUC = roc_auc_score(np.concatenate(C), np.concatenate(P))
-        return AUC
-
     def test_regressor(self, dataset):
-        '''N = len(dataset)
-        SAE = 0  # sum absolute error.
-        for i in range(0, N, batch_test):
-            data_batch = list(zip(*dataset[i:i+batch_test]))
-            predicted_values, correct_values = self.model.forward_regressor(
-                                               data_batch, train=False)
-            SAE += sum(np.abs(predicted_values-correct_values))
-        MAE = SAE / N  # mean absolute error.
-        return MAE'''
         N = len(dataset)
+        all_predicted_values = []
+        all_correct_values = []
         for i in range(0, N, batch_test):
             data_batch = list(zip(*dataset[i:i+batch_test]))
-            predicted_values, correct_values = self.model.forward_regressor(
-                                               data_batch, train=False)
+            fingerprints_batch = [fp.clone().detach().to(device) for fp in data_batch[0]]
+            adjacencies_batch = [adj.clone().detach().to(device) for adj in data_batch[1]]
+            molecular_sizes_batch = torch.tensor(data_batch[2], dtype=torch.long).to(device)
+            homo_lumo_batch = torch.stack([hl.clone().detach().to(device) for hl in data_batch[3]]).to(device)
+            correct_values_batch = torch.tensor(data_batch[4], dtype=torch.float32).to(device)
+            predicted_values, correct_values = self.model((fingerprints_batch, adjacencies_batch, molecular_sizes_batch, correct_values_batch), homo_lumo_batch, train=False)
+            all_predicted_values.append(predicted_values)
+            all_correct_values.append(correct_values)
 
-        r2 = r2_score(predicted_values, correct_values)
+        all_predicted_values = np.concatenate(all_predicted_values)
+        all_correct_values = np.concatenate(all_correct_values)
+        r2 = r2_score(all_predicted_values, all_correct_values)
         return r2
 
     def save_result(self, result, filename):
         with open(filename, 'a') as f:
             f.write(result + '\n')
 
+if __name__ == "__main__":
+
+    (task, dataset, radius, dim, layer_hidden, layer_output,
+     batch_train, batch_test, lr, lr_decay, decay_interval, iteration,
+     homo_lumo_dim, mlp_hidden_dim, mlp_output_dim, setting) = sys.argv[1:]
+    (radius, dim, layer_hidden, layer_output,
+     batch_train, batch_test, decay_interval,
+     iteration, homo_lumo_dim, mlp_hidden_dim,
+     mlp_output_dim) = map(int, [radius, dim, layer_hidden, layer_output,
+                            batch_train, batch_test,
+                            decay_interval, iteration,
+                            homo_lumo_dim, mlp_hidden_dim,
+                            mlp_output_dim])
+    lr, lr_decay = map(float, [lr, lr_decay])
+
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+        print('The code uses a GPU!')
+    else:
+        device = torch.device('cpu')
+        print('The code uses a CPU...')
+    print('-'*100)
+
+    print('Preprocessing the', dataset, 'dataset.')
+    print('Just a moment......')
+    (dataset_train, dataset_dev, dataset_test,
+     N_fingerprints) = pp.create_datasets(task, dataset, radius, device)
+    print('-'*100)
+
+    print('The preprocess has finished!')
+    print('# of training data samples:', len(dataset_train))
+    print('# of development data samples:', len(dataset_dev))
+    print('# of test data samples:', len(dataset_test))
+    print('-'*100)
+
+
+    print('Creating a model.')
+    torch.manual_seed(1234)
+    gnn = GraphNeuralNetwork(N_fingerprints, dim, layer_hidden, layer_output).to(device)
+    model = CombinedModel(gnn, homo_lumo_dim, mlp_hidden_dim, mlp_output_dim).to(device)
+
+    trainer = Trainer(model)
+    tester = Tester(model)
+    print('# of model parameters:', sum([np.prod(p.size()) for p in model.parameters()]))
+    print('-'*100)
+
+    file_result = 'test_result.txt'
+    result = 'Epoch\tTime(sec)\tLoss_dev\tLoss_train\tR2_dev\tR2_train'
+
+    with open(file_result, 'w') as f:
+        f.write(result + '\n')
+
+    print('Start training.')
+    print('The result is saved in the output directory every epoch!')
+
+    np.random.seed(1234)
+
+    start = timeit.default_timer()
+
+    for epoch in range(iteration):
+
+        epoch += 1
+        if epoch % decay_interval == 0:
+            trainer.optimizer.param_groups[0]['lr'] *= lr_decay
+
+        loss_dev = trainer.train(dataset_dev)
+        loss_train = trainer.train(dataset_train)
+
+        prediction_dev = tester.test_regressor(dataset_dev)
+        prediction_train = tester.test_regressor(dataset_train)
+
+        time = timeit.default_timer() - start
+
+        if epoch == 1:
+            minutes = time * iteration / 60
+            hours = int(minutes / 60)
+            minutes = int(minutes - 60 * hours)
+            print('The training will finish in about', hours, 'hours', minutes, 'minutes.')
+            print('-'*100)
+            print(result)
+
+        result = '\t'.join(map(str, [epoch, time, loss_dev, loss_train, prediction_dev, prediction_train]))
+        tester.save_result(result, file_result)
+
+        print(result)
 
 if __name__ == "__main__":
 
