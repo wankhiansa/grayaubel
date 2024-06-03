@@ -69,6 +69,8 @@ class CombinedModel(nn.Module):
         self.mlp_hl = nn.Sequential(
             nn.Linear(homo_lumo_dim, mlp_hidden_dim),
             nn.ReLU(),
+            nn.Linear(mlp_hidden_dim, mlp_hidden_dim),
+            nn.ReLU(),
             nn.Linear(mlp_hidden_dim, mlp_output_dim),
             nn.ReLU()
         )
@@ -199,8 +201,9 @@ if __name__ == "__main__":
     print('# of model parameters:', sum([np.prod(p.size()) for p in model.parameters()]))
     print('-'*100)
 
-    file_result = 'test_result.txt'
-    result = 'Epoch\tTime(sec)\tLoss_dev\tLoss_train\tR2_dev\tR2_train'
+    file_result = '../output/result--' + setting + '.txt'
+    if task == 'regression':
+        result = 'Epoch\tTime(sec)\tLoss_dev\tLoss_train\tR2_dev\tR2_train'
 
     with open(file_result, 'w') as f:
         f.write(result + '\n')
@@ -239,93 +242,9 @@ if __name__ == "__main__":
 
         print(result)
 
-if __name__ == "__main__":
+    # Test with dataset_test
+    r2_test = tester.test_regressor(dataset_test)
+    print(f'R^2 score on test dataset: {r2_test}')
 
-    (task, dataset, radius, dim, layer_hidden, layer_output,
-     batch_train, batch_test, lr, lr_decay, decay_interval, iteration,
-     setting) = sys.argv[1:]
-    (radius, dim, layer_hidden, layer_output,
-     batch_train, batch_test, decay_interval,
-     iteration) = map(int, [radius, dim, layer_hidden, layer_output,
-                            batch_train, batch_test,
-                            decay_interval, iteration])
-    lr, lr_decay = map(float, [lr, lr_decay])
-
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-        print('The code uses a GPU!')
-    else:
-        device = torch.device('cpu')
-        print('The code uses a CPU...')
-    print('-'*100)
-
-    print('Preprocessing the', dataset, 'dataset.')
-    print('Just a moment......')
-    (dataset_train, dataset_dev, dataset_test,
-     N_fingerprints) = pp.create_datasets(task, dataset, radius, device)
-    print('-'*100)
-
-    print('The preprocess has finished!')
-    print('# of training data samples:', len(dataset_train))
-    print('# of development data samples:', len(dataset_dev))
-    print('# of test data samples:', len(dataset_test))
-    print('-'*100)
-
-    print('Creating a model.')
-    torch.manual_seed(1234)
-    model = MolecularGraphNeuralNetwork(
-            N_fingerprints, dim, layer_hidden, layer_output).to(device)
-    trainer = Trainer(model)
-    tester = Tester(model)
-    print('# of model parameters:',
-          sum([np.prod(p.size()) for p in model.parameters()]))
-    print('-'*100)
-
-    file_result = '../output/result--' + setting + '.txt'
-    if task == 'classification':
-        result = 'Epoch\tTime(sec)\tLoss_train\tAUC_dev\tAUC_test'
-    if task == 'regression':
-        result = 'Epoch\tTime(sec)\tLoss_dev\tLoss_train\tR2_dev\tR2_train'
-
-    with open(file_result, 'w') as f:
-        f.write(result + '\n')
-
-    print('Start training.')
-    print('The result is saved in the output directory every epoch!')
-
-    np.random.seed(1234)
-
-    start = timeit.default_timer()
-
-    for epoch in range(iteration):
-
-        epoch += 1
-        if epoch % decay_interval == 0:
-            trainer.optimizer.param_groups[0]['lr'] *= lr_decay
-
-        loss_dev = trainer.train(dataset_dev)
-        loss_train = trainer.train(dataset_train)
-
-        if task == 'classification':
-            prediction_dev = tester.test_classifier(dataset_dev)
-            prediction_test = tester.test_classifier(dataset_test)
-        if task == 'regression':
-            prediction_dev = tester.test_regressor(dataset_dev)
-            prediction_train = tester.test_regressor(dataset_train)
-
-        time = timeit.default_timer() - start
-
-        if epoch == 1:
-            minutes = time * iteration / 60
-            hours = int(minutes / 60)
-            minutes = int(minutes - 60 * hours)
-            print('The training will finish in about',
-                  hours, 'hours', minutes, 'minutes.')
-            print('-'*100)
-            print(result)
-
-        result = '\t'.join(map(str, [epoch, time, loss_dev, loss_train,
-                                     prediction_dev, prediction_train]))
-        tester.save_result(result, file_result)
-
-        print(result)
+    # Save model
+    torch.save(model.state_dict(), '../model/trained_model.pth')
