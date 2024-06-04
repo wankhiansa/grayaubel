@@ -63,12 +63,13 @@ class GraphNeuralNetwork(nn.Module):
         return molecular_vectors
     
 class CombinedModel(nn.Module):
-    def __init__(self, gnn, homo_lumo_dim, mlp_hidden_dim, mlp_output_dim):
+    def __init__(self, gnn, homo_lumo_dim, mlp_hidden_dim, mlp_output_dim, dropout_rate):
         super(CombinedModel, self).__init__()
         self.gnn = gnn
         self.mlp_hl = nn.Sequential(
             nn.Linear(homo_lumo_dim, mlp_hidden_dim),
             nn.ReLU(),
+            nn.Dropout(p=dropout_rate),
             nn.Linear(mlp_hidden_dim, mlp_output_dim),
             nn.ReLU()
         )
@@ -157,8 +158,8 @@ class Tester(object):
 if __name__ == "__main__":
 
     (task, dataset, radius, dim, layer_hidden, layer_output,
-     batch_train, batch_test, lr, lr_decay, decay_interval,  weight_decay,
-     iteration, homo_lumo_dim, mlp_hidden_dim, mlp_output_dim, setting) = sys.argv[1:]
+     batch_train, batch_test, lr, lr_decay, dropout_rate, decay_interval,
+     weight_decay, iteration, homo_lumo_dim, mlp_hidden_dim, mlp_output_dim, setting) = sys.argv[1:]
     (radius, dim, layer_hidden, layer_output,
      batch_train, batch_test, decay_interval,
      iteration, homo_lumo_dim, mlp_hidden_dim,
@@ -167,7 +168,7 @@ if __name__ == "__main__":
                             decay_interval, iteration,
                             homo_lumo_dim, mlp_hidden_dim,
                             mlp_output_dim])
-    lr, lr_decay, weight_decay = map(float, [lr, lr_decay, weight_decay])
+    lr, lr_decay, dropout_rate, weight_decay = map(float, [lr, lr_decay, dropout_rate, weight_decay])
 
     if torch.cuda.is_available():
         device = torch.device('cuda')
