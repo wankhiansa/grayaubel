@@ -69,8 +69,6 @@ class CombinedModel(nn.Module):
         self.mlp_hl = nn.Sequential(
             nn.Linear(homo_lumo_dim, mlp_hidden_dim),
             nn.ReLU(),
-            nn.Linear(mlp_hidden_dim, mlp_hidden_dim),
-            nn.ReLU(),
             nn.Linear(mlp_hidden_dim, mlp_output_dim),
             nn.ReLU()
         )

@@ -13,10 +13,10 @@ layer_output=4
 
 batch_train=32
 batch_test=32
-lr=1e-4
-lr_decay=0.95
+lr=1e-3
+lr_decay=0.9
 decay_interval=10
-weight_decay=1e-4
+weight_decay=1e-6
 iteration=500
 
 homo_lumo_dim=3
