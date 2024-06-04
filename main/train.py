@@ -194,7 +194,7 @@ if __name__ == "__main__":
     print('Creating a model.')
     torch.manual_seed(1234)
     gnn = GraphNeuralNetwork(N_fingerprints, dim, layer_hidden, layer_output).to(device)
-    model = CombinedModel(gnn, homo_lumo_dim, mlp_hidden_dim, mlp_output_dim).to(device)
+    model = CombinedModel(gnn, homo_lumo_dim, mlp_hidden_dim, mlp_output_dim, dropout_rate).to(device)
 
     trainer = Trainer(model)
     tester = Tester(model)
