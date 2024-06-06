@@ -2,7 +2,8 @@ import sys
 import timeit
 
 import numpy as np
-
+import pandas as pd
+import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
@@ -201,7 +202,7 @@ if __name__ == "__main__":
     print('# of model parameters:', sum([np.prod(p.size()) for p in model.parameters()]))
     print('-'*100)
 
-    file_result = '../output/result--' + setting + '.txt'
+    file_result = '../output/r2_result/result.txt'
     if task == 'regression':
         result = 'Epoch\tTime(sec)\tLoss_dev\tLoss_train\tR2_dev\tR2_train'
 
@@ -242,9 +243,35 @@ if __name__ == "__main__":
 
         print(result)
 
+    def graph_result(file):
+
+        df = pd.read_csv(file, delimiter='\t')
+
+        # Plot training and validation loss
+        plt.figure(figsize=(12, 6))
+        plt.subplot(1, 2, 1)
+        plt.plot(df['Loss_train'], label='Training Loss')
+        plt.plot(df['Loss_dev'], label='Validation Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+
+        # Plot training and validation accuracy
+        plt.subplot(1, 2, 2)
+        plt.plot(df['R2_train'], label='Training Accuracy')
+        plt.plot(df['R2_dev'], label='Validation Accuracy')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy')
+        plt.legend()
+
+        plt.savefig('../output/graph_result/graph_result_.png')
+
     # Test with dataset_test
     r2_test = tester.test_regressor(dataset_test)
     print(f'R^2 score on test dataset: {r2_test}')
+
+    # Print and save graph result
+    graph_result(file_result)
 
     # Save model
     torch.save(model.state_dict(), '../model/trained_model.pth')

@@ -18,7 +18,7 @@ lr_decay=0.9
 dropout_rate=0.5
 decay_interval=10
 weight_decay=1e-6
-iteration=500
+iteration=5
 
 homo_lumo_dim=3
 mlp_hidden_dim=64
